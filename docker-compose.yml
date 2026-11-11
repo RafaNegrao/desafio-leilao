@@ -1,0 +1,39 @@
+# Emuladores AWS locais SEM conta e sem token:
+#  - DynamoDB Local (transações condicionais, usadas na gravação dos lances)
+#  - ElasticMQ (API compatível com SQS, inclusive filas FIFO)
+# Para usar um emulador único (Floci, LocalStack), defina AWS_ENDPOINT_URL e ignore estes dois serviços.
+x-env: &env
+  DYNAMODB_ENDPOINT_URL: http://dynamodb:8000
+  SQS_ENDPOINT_URL: http://sqs:9324
+  AWS_REGION: us-east-1
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["8000:8000"]
+
+  sqs:
+    image: softwaremill/elasticmq-native:latest
+    ports: ["9324:9324", "9325:9325"]
+
+  setup:               # cria tabela, filas (FIFO + DLQ) e um leilão de exemplo
+    build: .
+    command: python scripts/setup_local.py
+    environment: *env
+    depends_on: [dynamodb, sqs]
+
+  worker:              # equivalente local do Lambda processador (escritor único por leilão)
+    build: .
+    command: python scripts/run_worker.py
+    environment: *env
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  simulate:            # gerador de carga: docker compose run --rm simulate
+    build: .
+    profiles: ["tools"]
+    command: python scripts/simulate.py --bids 5000
+    environment: *env
